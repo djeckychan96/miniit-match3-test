@@ -19,9 +19,25 @@ namespace MiniIT.MATCH3
         [SerializeField]
         private float cellSize = 1f;
 
+        [Header("Game Settings")]
+        [SerializeField]
+        private int startMoves = 20;
+
+        [SerializeField]
+        private GemType targetGemType = GemType.Purple;
+
+        [SerializeField]
+        private int targetAmount = 20;
+
         [Header("References")]
         [SerializeField]
         private GemView gemPrefab = null;
+
+        [SerializeField]
+        private GameUI gameUI = null;
+
+        [SerializeField]
+        private ParticleSystem matchParticlesPrefab = null;
 
         [Header("Animation Settings")]
         [SerializeField]
@@ -42,6 +58,11 @@ namespace MiniIT.MATCH3
         /// Finds matching gem sequences on the logical board.
         /// </summary>
         private MatchFinder matchFinder = null;
+
+        /// <summary>
+        /// Stores the current game session state.
+        /// </summary>
+        private GameSession gameSession = null;
 
         /// <summary>
         /// Stores visual representations associated with gem models.
@@ -134,6 +155,29 @@ namespace MiniIT.MATCH3
         }
 
         /// <summary>
+        /// Counts target gems included in the specified matches.
+        /// </summary>
+        /// <param name="matches">Matched board positions.</param>
+        /// <returns>Number of gems belonging to the current level goal.</returns>
+        private int CountTargetGems(List<BoardPosition> matches)
+        {
+            int targetGemCount = 0;
+
+            for (int i = 0; i < matches.Count; ++i)
+            {
+                Gem gem = board.GetGem(matches[i]);
+
+                if (gem != null &&
+                    gem.GemType == gameSession.TargetGemType)
+                {
+                    ++targetGemCount;
+                }
+            }
+
+            return targetGemCount;
+        }
+
+        /// <summary>
         /// Resolves board matches, falling gems and automatic cascades.
         /// </summary>
         /// <param name="matches">Initial matched positions.</param>
@@ -144,6 +188,11 @@ namespace MiniIT.MATCH3
 
             while (currentMatches.Count > 0)
             {
+                int targetGemCount =
+                    CountTargetGems(currentMatches);
+
+                gameSession.RegisterCollectedGems(targetGemCount);
+
                 yield return StartCoroutine(
                     DestroyMatches(currentMatches));
 
@@ -213,6 +262,7 @@ namespace MiniIT.MATCH3
                     gemView.Initialize(gem);
                     GemViews.Add(gem, gemView);
                     gemView.Clicked += OnGemClicked;
+                    gemView.SwipeRequested += OnGemSwipeRequested;
 
                     StartCoroutine(
                         AnimateGemView(gemView, targetPosition));
@@ -245,6 +295,13 @@ namespace MiniIT.MATCH3
             BoardGenerator boardGenerator = new BoardGenerator();
             board = boardGenerator.Generate(width, height);
             matchFinder = new MatchFinder();
+            gameSession = new GameSession(startMoves,targetGemType,targetAmount);
+            
+            if (gameUI != null)
+            {
+                gameUI.Initialize(gameSession);
+            }
+
             CreateBoardView();
         }
 
@@ -280,8 +337,60 @@ namespace MiniIT.MATCH3
                     gemView.Initialize(gem);
                     GemViews.Add(gem, gemView);
                     gemView.Clicked += OnGemClicked;
+                    gemView.SwipeRequested += OnGemSwipeRequested;
                 }
             }
+        }
+
+        /// <summary>
+        /// Handles a swipe request between adjacent gems.
+        /// </summary>
+        /// <param name="gemView">Gem view where the swipe started.</param>
+        /// <param name="targetPosition">Adjacent position selected by the swipe.</param>
+        private void OnGemSwipeRequested(
+            GemView gemView,
+            BoardPosition targetPosition)
+        {
+            if (inputLocked ||
+                gemView == null ||
+                gameSession == null ||
+                gameSession.IsFinished)
+            {
+                return;
+            }
+
+            if (!board.IsInside(targetPosition))
+            {
+                return;
+            }
+
+            if (!gemView.Position.IsAdjacentTo(targetPosition))
+            {
+                return;
+            }
+
+            Gem targetGem = board.GetGem(targetPosition);
+
+            if (targetGem == null)
+            {
+                return;
+            }
+
+            GemView targetGemView = null;
+
+            if (!GemViews.TryGetValue(targetGem, out targetGemView))
+            {
+                return;
+            }
+
+            if (selectedGemView != null)
+            {
+                selectedGemView.SetSelected(false);
+                selectedGemView = null;
+            }
+
+            StartCoroutine(
+                SwapGemViews(gemView, targetGemView));
         }
 
         /// <summary>
@@ -290,7 +399,10 @@ namespace MiniIT.MATCH3
         /// <param name="gemView">Gem view selected by the player.</param>
         private void OnGemClicked(GemView gemView)
         {
-            if (inputLocked || gemView == null)
+           if (inputLocked ||
+                gemView == null ||
+                gameSession == null ||
+                gameSession.IsFinished)
             {
                 return;
             }
@@ -374,7 +486,12 @@ namespace MiniIT.MATCH3
 
             if (createsMatch)
             {
-                yield return StartCoroutine(ResolveBoard(matches));
+                gameSession.RegisterMove();
+
+                yield return StartCoroutine(
+                    ResolveBoard(matches));
+
+                gameSession.CompleteTurn();
             }
 
             inputLocked = false;
@@ -487,6 +604,31 @@ namespace MiniIT.MATCH3
         }
 
         /// <summary>
+        /// Creates a particle burst at the specified gem view position.
+        /// </summary>
+        /// <param name="gemView">Gem view used as the particle origin.</param>
+        private void CreateMatchParticles(GemView gemView)
+        {
+            if (matchParticlesPrefab == null ||
+                gemView == null)
+            {
+                return;
+            }
+
+            ParticleSystem particles =
+                Instantiate<ParticleSystem>(
+                    matchParticlesPrefab,
+                    gemView.transform.position,
+                    Quaternion.identity);
+
+            particles.Play();
+
+            Destroy(
+                particles.gameObject,
+                particles.main.duration + 1f);
+        }
+
+        /// <summary>
         /// Removes all gems included in the specified matches.
         /// </summary>
         /// <param name="matches">Matched board positions.</param>
@@ -504,6 +646,8 @@ namespace MiniIT.MATCH3
                 }
 
                 GemView gemView = GemViews[gem];
+
+                CreateMatchParticles(gemView);
 
                 GemViews.Remove(gem);
                 board.SetGem(position, null);

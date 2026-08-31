@@ -7,7 +7,11 @@ namespace MiniIT.MATCH3
     /// <summary>
     /// Displays a gem model in the Unity scene.
     /// </summary>
-    public class GemView : MonoBehaviour, IPointerClickHandler
+    public class GemView :
+        MonoBehaviour,
+        IPointerClickHandler,
+        IPointerDownHandler,
+        IPointerUpHandler
     {
         [Header("References")]
 
@@ -18,6 +22,14 @@ namespace MiniIT.MATCH3
 
         [SerializeField]
         private Sprite[] gemSprites = null;
+
+        [Header("Input Settings")]
+        [SerializeField]
+        private float swipeThreshold = 50f;
+
+        private Vector2 pointerDownPosition;
+
+        private bool suppressNextClick = false;
 
         /// <summary>
         /// Gem model represented by this view.
@@ -44,6 +56,11 @@ namespace MiniIT.MATCH3
         /// Invoked when the player selects this gem view.
         /// </summary>
         public event Action<GemView> Clicked = null;
+
+        /// <summary>
+        /// Occurs when the player swipes towards an adjacent board position.
+        /// </summary>
+        public event Action<GemView, BoardPosition> SwipeRequested = null;
 
         /// <summary>
         /// Validates required scene references.
@@ -118,9 +135,72 @@ namespace MiniIT.MATCH3
         {
             Action<GemView> clicked = Clicked;
 
+            if (suppressNextClick)
+            {
+                suppressNextClick = false;
+
+                return;
+            }
+
             if (clicked != null)
             {
                 clicked(this);
+            }
+        }
+
+        /// <summary>
+        /// Stores the pointer position when interaction begins.
+        /// </summary>
+        /// <param name="eventData">Pointer event data provided by Unity.</param>
+        public void OnPointerDown(PointerEventData eventData)
+        {
+            pointerDownPosition = eventData.position;
+        }
+
+        /// <summary>
+        /// Detects a swipe and requests a swap with the adjacent board position.
+        /// </summary>
+        /// <param name="eventData">Pointer event data provided by Unity.</param>
+        public void OnPointerUp(PointerEventData eventData)
+        {
+            if (gem == null)
+            {
+                return;
+            }
+
+            Vector2 swipeDelta =
+                eventData.position - pointerDownPosition;
+
+            if (swipeDelta.magnitude < swipeThreshold)
+            {
+                return;
+            }
+
+            int columnOffset = 0;
+            int rowOffset = 0;
+
+            if (Mathf.Abs(swipeDelta.x) > Mathf.Abs(swipeDelta.y))
+            {
+                columnOffset = swipeDelta.x > 0f ? 1 : -1;
+            }
+            else
+            {
+                rowOffset = swipeDelta.y > 0f ? 1 : -1;
+            }
+
+            BoardPosition targetPosition =
+                new BoardPosition(
+                    gem.Position.Column + columnOffset,
+                    gem.Position.Row + rowOffset);
+
+            suppressNextClick = true;
+
+            Action<GemView, BoardPosition> swipeRequested =
+                SwipeRequested;
+
+            if (swipeRequested != null)
+            {
+                swipeRequested(this, targetPosition);
             }
         }
     }
